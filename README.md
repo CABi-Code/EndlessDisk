@@ -7,6 +7,18 @@ winfsp скачвать тут : https://winfsp.dev/rel/
 
 настройка rclone
 
+Переместить содержимое с rclone.exe в папку C:\rclone
+
+Создать переменную среды rclone
+	1. Нажать клавишу Win, введите «перемен»
+	2. В открывшемся окне нажмите кнопку «Переменные среды...» (Environment Variables) внизу.
+	3. В разделе «Переменные пользователя» найдите строку Path и нажмите «Изменить...» (Edit).
+	4. В появившемся списке нажмите «Создать» (New) и вставьте путь к папке: C:\rclone.
+	5. Нажмите ОК во всех окнах.
+
+Проверить в консоли
+	rclone version
+
 Команда чтоб открыть веб-интерфейс
 rclone rcd --rc-web-gui
 	Нужна вкладка Configs -> Создать новый
@@ -18,6 +30,18 @@ rclone rcd --rc-web-gui
 		AWS Access Key ID	: Access Key из панели VK Cloud
 		AWS Secret Access Key	: Secret Key из панели VK Cloud
 		Endpoint for S3 API	: hb.bizmrg.com
+
+или через консоль:
+Storage: Пишите 4 (или s3).
+Provider: Ищите в списке Any other S3 compatible provider (обычно это в самом конце, пункт Other).
+env_auth: Просто жмите Enter (оставит false).
+access_key_id: Вставьте ваш Access Key из панели VK Cloud.
+secret_access_key: Вставьте ваш Secret Key.
+region: Просто жмите Enter (оставьте пустым).
+endpoint: Введите вручную: hb.bizmrg.com
+location_constraint: Просто Enter.
+acl: Просто Enter.
+Edit advanced config? Пишите n (Нет)
 
 
 
