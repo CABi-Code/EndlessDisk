@@ -46,6 +46,7 @@ Edit advanced config? Пишите n (Нет)
 
 
 Команда чтоб запустить диск
+
 rclone mount VKDisk:vk-disk V: --links --vfs-cache-mode full --vfs-cache-max-size 20G --vfs-read-chunk-size 64M --vfs-read-chunk-size-limit 1G --buffer-size 128M --vfs-cache-max-age 24h --transfers 16 --no-console --vfs-cache-poll-interval 15s --dir-cache-time 10s --volname "VK диск" --vfs-disk-space-total-size 100G
 
 Заменить VKDisk:vk-disk на ваши параметры
