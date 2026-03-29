@@ -162,4 +162,4 @@ rclone mount VKDisk:vk-disk V: --links --vfs-cache-mode full --vfs-cache-max-siz
 
 **Готово!** Теперь у вас есть быстрый сетевой диск на базе VK Cloud.
 
-Если возникнут вопросы — пишите.
+Если возникнут вопросы — [пишите](https://t.me/cabi_mc).
