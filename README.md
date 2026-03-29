@@ -48,12 +48,12 @@
 3. Откройте файл и отредактируйте настройки в самом начале
 
 ```ps1
-$DOMAIN        = "storage.cabi.world" # под ваши настройки VK Object Storage
-$BUCKET        = "vk-disk" # под ваши настройки VK Object Storage
-$DRIVE_LETTER  = "V:" # любой
-$RCLONE_REMOTE = "VKDisk" # под ваши настройки rclone
-$ENDPOINT_HOST = "hb.bizmrg.com" # без изменений
-$REGION        = "ru-msk" # без изменений
+$DOMAIN        = "storage.cabi.world"    # под ваши настройки VK Object Storage
+$BUCKET        = "vk-disk"               # под ваши настройки VK Object Storage
+$DRIVE_LETTER  = "V:"                    # любой
+$RCLONE_REMOTE = "VKDisk"                # под ваши настройки rclone
+$ENDPOINT_HOST = "hb.bizmrg.com"         # без изменений
+$REGION        = "ru-msk"                # без изменений
 ```
 
 5. Выполните команду ниже (начнется выполнение скриптов, займет ~2-3 минуты)
