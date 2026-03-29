@@ -13,6 +13,12 @@
 
 ---
 
+<video src="https://storage.cabi.world/2026-03-30%2004-13-13.mp4" width="100%" controls>
+  Ваш браузер не поддерживает видео.
+</video>
+
+---
+
 ## ✅ Требования
 
 - Windows 10 / 11 (64-bit)
