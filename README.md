@@ -18,6 +18,7 @@
 - Windows 10 / 11 (64-bit)
 - [rclone](https://rclone.org/downloads/)
 - [WinFsp](https://winfsp.dev/rel/)
+- Аккаунт с баккетами (Object Storage) в [VK Cloud](https://msk.cloud.vk.com/app) 
 
 ---
 
