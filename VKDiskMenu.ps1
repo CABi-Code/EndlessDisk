@@ -442,7 +442,7 @@ ps1 = Replace(WScript.ScriptFullName, ".vbs", ".ps1")
 mode = "" : filePath = ""
 If WScript.Arguments.Count >= 1 Then mode = WScript.Arguments(0)
 If WScript.Arguments.Count >= 2 Then filePath = WScript.Arguments(1)
-cmd = "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File """ & ps1 & """ """ & mode & """ """ & filePath & """"
+cmd = "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File """ & ps1 & """ """ & mode & """ """ & filePath & """
 objShell.Run cmd, 0, False
 "@
     [System.IO.File]::WriteAllText($VbsPath, $vbs, [System.Text.Encoding]::ASCII)
