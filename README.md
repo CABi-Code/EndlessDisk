@@ -33,7 +33,7 @@ git clone https://github.com/CABi-Code/EndlessDisk.git C:\EndlessDisk
 ### 2. Запустите менеджер
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File "C:\EndlessDisk\VKDiskMenu.ps1"
+powershell -ExecutionPolicy Bypass -File "C:\EndlessDisk\EndlessDisk.ps1"
 ```
 
 Или дважды щёлкните по `VKDiskMenu.ps1` (если разрешено выполнение скриптов).
