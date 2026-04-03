@@ -12,10 +12,27 @@ function Show-MainGui {
     $form.FormBorderStyle = "FixedSingle"
     $form.MaximizeBox = $false
     $form.BackColor = [System.Drawing.Color]::White
-    try {
-        $form.Icon = [System.Drawing.Icon]::ExtractAssociatedIcon(
-            [System.IO.Path]::Combine($env:SystemRoot, "System32", "shell32.dll"))
-    } catch {}
+	try {
+		$shell32Path = [System.IO.Path]::Combine($env:SystemRoot, "System32", "shell32.dll")
+		$iconHandle = [System.Runtime.InteropServices.Marshal]::AllocHGlobal(4)
+		$null = [System.Drawing.Icon]::ExtractAssociatedIcon($shell32Path)
+		
+		$shfi = New-Object System.Drawing.Icon([System.Drawing.Icon]::ExtractAssociatedIcon($shell32Path), 16, 16)
+		$form.Icon = [System.Drawing.Icon]::FromHandle(( (New-Object System.Windows.Forms.Label).Handle ))
+		
+		Add-Type -TypeDefinition @"
+			using System;
+			using System.Runtime.InteropServices;
+			public class IconExtractor {
+				[DllImport("shell32.dll", CharSet = CharSet.Auto)]
+				public static extern IntPtr ExtractIcon(IntPtr hInst, string lpszExeFileName, int nIconIndex);
+			}
+"@
+		$hIcon = [IconExtractor]::ExtractIcon(0, $shell32Path, 8)
+		if ($hIcon -ne 0) {
+			$form.Icon = [System.Drawing.Icon]::FromHandle($hIcon)
+		}
+	} catch {}
 
     $fTitle  = New-Object System.Drawing.Font("Segoe UI", 10, [System.Drawing.FontStyle]::Bold)
     $fNorm   = New-Object System.Drawing.Font("Segoe UI", 9)
