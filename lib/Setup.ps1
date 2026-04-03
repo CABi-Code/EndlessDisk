@@ -21,7 +21,7 @@ objShell.Run cmd, 0, False
 
 function Get-VbsPath {
     $scriptDir = Split-Path -Parent $PSCommandPath
-    return Join-Path $scriptDir "VKDiskMenu.vbs"
+    return Join-Path $scriptDir "EndlessDisk.vbs"
 }
 
 function Ensure-VbsLauncher {
