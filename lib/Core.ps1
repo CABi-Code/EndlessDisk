@@ -122,6 +122,9 @@ function Start-BackgroundTask {
     [void]$ps.AddScript({
         param($state, $work, $libDir)
 
+        $Global:state = $state
+        $script:state = $state
+
         if ($libDir) {
             . (Join-Path $libDir "Core.ps1")
             . (Join-Path $libDir "Setup.ps1")
@@ -130,8 +133,8 @@ function Start-BackgroundTask {
         $Global:state = $state
         $script:state = $state
 
-        try { 
-            & $work 
+        try {
+            & $work
         }
         catch { 
             if ($state) {

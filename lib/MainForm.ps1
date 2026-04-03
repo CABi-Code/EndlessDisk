@@ -307,15 +307,12 @@ function Show-MainGui {
     }
 
     # ---- UPDATE STATUS ----
-    $updateStatus = {
-        $hasRclone = $null -ne (Find-Rclone)
-        $hasWinFsp = Find-WinFsp
-        $hasKeys   = $null -ne (Get-S3Keys)
-        $hasMenu   = Test-ContextMenu
-        $mounted   = Test-DiskMounted
+    $applyStatus = {
+        param([hashtable]$r)
+        if (-not $r) { return }
 
         # rclone
-        if ($hasRclone) {
+        if ($r.HasRclone) {
             $stLabels["rclone"].Text = "Установлен"; $stLabels["rclone"].ForeColor = $cOk
             $stBtns["rclone"].Text = "Переустановить"; $stBtns["rclone"].Visible = $true
             $stBtns2["rclone"].Text = "Удалить"; $stBtns2["rclone"].Visible = $true
@@ -326,7 +323,7 @@ function Show-MainGui {
         }
 
         # WinFsp
-        if ($hasWinFsp) {
+        if ($r.HasWinFsp) {
             $stLabels["WinFsp"].Text = "Установлен"; $stLabels["WinFsp"].ForeColor = $cOk
             $stBtns["WinFsp"].Text = "Переустановить"; $stBtns["WinFsp"].Visible = $true
             $stBtns2["WinFsp"].Text = "Удалить"; $stBtns2["WinFsp"].Visible = $true
@@ -337,7 +334,7 @@ function Show-MainGui {
         }
 
         # S3 Config
-        if ($hasKeys) {
+        if ($r.HasKeys) {
             $stLabels["Конфиг S3"].Text = "Настроен"; $stLabels["Конфиг S3"].ForeColor = $cOk
             $stBtns["Конфиг S3"].Visible = $false; $stBtns2["Конфиг S3"].Visible = $false
         } else {
@@ -347,7 +344,7 @@ function Show-MainGui {
         }
 
         # Context menu
-        if ($hasMenu) {
+        if ($r.HasMenu) {
             $stLabels["Контекстное меню"].Text = "Установлено"; $stLabels["Контекстное меню"].ForeColor = $cOk
             $stBtns["Контекстное меню"].Text = "Переустановить"; $stBtns["Контекстное меню"].Visible = $true
             $stBtns2["Контекстное меню"].Text = "Удалить"; $stBtns2["Контекстное меню"].Visible = $true
@@ -358,15 +355,14 @@ function Show-MainGui {
         }
 
         # Disk
-        if ($mounted) {
+        if ($r.Mounted) {
             $stLabels["Диск"].Text = "$($script:Config.DriveLetter) подключен"
             $stLabels["Диск"].ForeColor = $cOk
             $stBtns["Диск"].Text = "Отключить"; $stBtns["Диск"].Visible = $true
             $stBtns2["Диск"].Visible = $false
 
-            $space = Get-DiskSpace
-            if ($space) {
-                $lblDiskInfo.Text = "Занято: $($space.UsedGB) ГБ  |  Свободно: $($space.FreeGB) ГБ"
+            if ($r.DiskSpace) {
+                $lblDiskInfo.Text = "Занято: $($r.DiskSpace.UsedGB) ГБ  |  Свободно: $($r.DiskSpace.FreeGB) ГБ"
                 $lblDiskInfo.ForeColor = $cOk
             } else {
                 $lblDiskInfo.Text = "Диск подключен (данные о размере недоступны)"
@@ -379,6 +375,69 @@ function Show-MainGui {
             $lblDiskInfo.Text = "Диск не подключен"
             $lblDiskInfo.ForeColor = $cGray
         }
+    }
+
+    $updateStatus = {
+        $r = @{
+            HasRclone = ($null -ne (Find-Rclone))
+            HasWinFsp = [bool](Find-WinFsp)
+            HasKeys   = ($null -ne (Get-S3Keys))
+            HasMenu   = [bool](Test-ContextMenu)
+            Mounted   = [bool](Test-DiskMounted)
+            DiskSpace = (Get-DiskSpace)
+        }
+        & $applyStatus $r
+    }
+
+    # ---- ASYNC STATUS REFRESH (non-blocking) ----
+    $script:stState = [hashtable]::Synchronized(@{
+        Running = $false
+        Done    = $false
+        Result  = $null
+    })
+    $script:stRunspace = $null
+
+    $refreshStatusAsync = {
+        if ($script:stState.Running) { return }
+
+        $script:stState.Running = $true
+        $script:stState.Done    = $false
+        $script:stState.Result  = $null
+
+        $iss = [System.Management.Automation.Runspaces.InitialSessionState]::CreateDefault2()
+        $rs = [runspacefactory]::CreateRunspace($iss)
+        $rs.ApartmentState = "STA"
+        $rs.Open()
+
+        $rs.SessionStateProxy.SetVariable("stState", $script:stState)
+        if ($script:LibDir) {
+            $rs.SessionStateProxy.SetVariable("libDir", $script:LibDir)
+        }
+
+        $ps = [powershell]::Create()
+        $ps.Runspace = $rs
+
+        [void]$ps.AddScript({
+            param($stState, $libDir)
+            if ($libDir) {
+                . (Join-Path $libDir "Core.ps1")
+                . (Join-Path $libDir "Setup.ps1")
+            }
+            try {
+                $stState.Result = @{
+                    HasRclone = ($null -ne (Find-Rclone))
+                    HasWinFsp = [bool](Find-WinFsp)
+                    HasKeys   = ($null -ne (Get-S3Keys))
+                    HasMenu   = [bool](Test-ContextMenu)
+                    Mounted   = [bool](Test-DiskMounted)
+                    DiskSpace = (Get-DiskSpace)
+                }
+            } catch {}
+            $stState.Done = $true
+        }).AddArgument($script:stState).AddArgument($script:LibDir)
+
+        $async = $ps.BeginInvoke()
+        $script:stRunspace = @{ PS = $ps; RS = $rs; Async = $async }
     }
 
     # ---- ASYNC RUN ----
@@ -426,11 +485,24 @@ function Show-MainGui {
                 $lblStatusText.ForeColor = $cOk
             }
             Set-ButtonsEnabled $true
-            & $updateStatus
+            & $refreshStatusAsync
             if ($script:onDoneCallback) {
                 $cb = $script:onDoneCallback
                 $script:onDoneCallback = $null
                 & $cb
+            }
+        }
+        # Async status refresh completion
+        if ($script:stState.Done -and $script:stState.Running) {
+            if ($script:stRunspace) {
+                try { $script:stRunspace.PS.EndInvoke($script:stRunspace.Async) } catch {}
+                $script:stRunspace.PS.Dispose()
+                $script:stRunspace.RS.Close()
+                $script:stRunspace = $null
+            }
+            $script:stState.Running = $false
+            if ($script:stState.Result) {
+                & $applyStatus $script:stState.Result
             }
         }
     })
@@ -553,7 +625,7 @@ function Show-MainGui {
             if ($ok) { Add-DesktopShortcut } else { $chkShort.Checked = $false }
         } elseif (-not $chkShort.Checked) { Remove-DesktopShortcut }
 
-        & $updateStatus
+        & $refreshStatusAsync
         $lblStatusText.Text = "Настройки сохранены"
         $lblStatusText.ForeColor = $cOk
     })
@@ -637,6 +709,12 @@ function Show-MainGui {
     # Очистка после закрытия программы
     $pollTimer.Stop()
     $pollTimer.Dispose()
+    if ($script:stRunspace) {
+        try { $script:stRunspace.PS.EndInvoke($script:stRunspace.Async) } catch {}
+        $script:stRunspace.PS.Dispose()
+        $script:stRunspace.RS.Close()
+        $script:stRunspace = $null
+    }
     $form.Dispose()
 }
 

@@ -2,8 +2,6 @@
 # EndlessDisk — Setup: Install, Uninstall, Mount, Autostart
 # ============================================================
 
-$Global:state = $Global:state
-
 # --- VBS Launcher ---
 function Write-VbsLauncher([string]$VbsPath) {
     $vbs = @"
@@ -187,15 +185,41 @@ function Uninstall-WinFsp {
 
     try {
         $proc = Start-Process "msiexec.exe" -ArgumentList "/x $productId /passive /norestart" `
-            -Verb RunAs -Wait -PassThru -ErrorAction Stop
+            -Verb RunAs -PassThru -ErrorAction Stop
+
+        if ($proc -and -not $proc.HasExited) {
+            $proc.WaitForExit(120000)
+        }
 
         if ($proc.ExitCode -ne 0 -and $proc.ExitCode -ne 3010) {
             throw "msiexec завершился с кодом $($proc.ExitCode)"
         }
 
         if ($state) {
-            $state.Status  = "WinFsp успешно удалён"
-            $state.Percent = 100
+            $state.Status  = "Проверка удаления WinFsp..."
+            $state.Percent = 70
+        }
+
+        $waited = 0
+        while ((Find-WinFsp) -and $waited -lt 10) {
+            Start-Sleep -Seconds 1
+            $waited++
+        }
+
+        if (Find-WinFsp) {
+            if ($proc.ExitCode -eq 3010) {
+                if ($state) {
+                    $state.Status  = "WinFsp: требуется перезагрузка"
+                    $state.Percent = 100
+                }
+            } else {
+                throw "WinFsp не был полностью удалён. Попробуйте перезагрузить компьютер."
+            }
+        } else {
+            if ($state) {
+                $state.Status  = "WinFsp успешно удалён"
+                $state.Percent = 100
+            }
         }
     }
     catch {
