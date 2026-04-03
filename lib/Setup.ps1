@@ -1,25 +1,29 @@
-﻿# ============================================================
+# ============================================================
 # EndlessDisk — Setup: Install, Uninstall, Mount, Autostart
 # ============================================================
+
+$Global:state = $Global:state
 
 # --- VBS Launcher ---
 function Write-VbsLauncher([string]$VbsPath) {
     $vbs = @"
-Dim mode, filePath, cmd, ps1
+Dim mode, filePath, cmd, ps1, fso
 Set objShell = CreateObject("WScript.Shell")
-ps1 = Replace(WScript.ScriptFullName, ".vbs", ".ps1")
+Set fso = CreateObject("Scripting.FileSystemObject")
+ps1 = fso.BuildPath(fso.GetParentFolderName(fso.GetParentFolderName(WScript.ScriptFullName)), fso.GetBaseName(WScript.ScriptFullName) & ".ps1")
 mode = "" : filePath = ""
 If WScript.Arguments.Count >= 1 Then mode = WScript.Arguments(0)
 If WScript.Arguments.Count >= 2 Then filePath = WScript.Arguments(1)
-cmd = "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File " & Chr(34) & ps1 & Chr(34) & " " & Chr(34) & mode & Chr(34) & " " & Chr(34) & filePath & Chr(34)
+cmd = "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Normal -File " & Chr(34) & ps1 & Chr(34) & " " & Chr(34) & mode & Chr(34) & " " & Chr(34) & filePath & Chr(34)
 objShell.Run cmd, 0, False
 "@
     [System.IO.File]::WriteAllText($VbsPath, $vbs, [System.Text.Encoding]::ASCII)
 }
 
+
 function Get-VbsPath {
     $scriptDir = Split-Path -Parent $PSCommandPath
-    return Join-Path $scriptDir "EndlessDisk.vbs"
+    return Join-Path $scriptDir "VKDiskMenu.vbs"
 }
 
 function Ensure-VbsLauncher {
@@ -28,8 +32,24 @@ function Ensure-VbsLauncher {
     return $vbs
 }
 
+
+function Protect-State {
+    if (-not $state) {
+        $state = $Global:state
+        if (-not $state) { $state = $script:state }
+        if (-not $state) {
+            throw "CRITICAL: state variable is lost in background task!`nСообщи разработчику."
+        }
+    }
+    return $state
+}
+
+
 # --- Install rclone ---
 function Install-RcloneAuto {
+	
+	$state = Protect-State
+
     $rclone = Find-Rclone
     if ($rclone) { return $rclone }
 
@@ -73,6 +93,9 @@ function Install-RcloneAuto {
 
 # --- Uninstall rclone ---
 function Uninstall-Rclone {
+
+	$state = Protect-State
+
     $state.Status = "Остановка rclone..."
     $state.Block  = "Setup.ps1 -> Uninstall-Rclone -> StopProcess"
     $state.Percent = 10
@@ -104,6 +127,8 @@ function Uninstall-Rclone {
 # --- Install WinFsp ---
 function Install-WinFspAuto {
     if (Find-WinFsp) { return $true }
+
+	$state = Protect-State
 
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
     $state.Status  = "Поиск последней версии WinFsp..."
@@ -140,18 +165,45 @@ function Install-WinFspAuto {
 
 # --- Uninstall WinFsp ---
 function Uninstall-WinFsp {
+    $state = $Global:state
+    if (-not $state) { $state = $script:state }
+
     $productId = Get-WinFspUninstallId
-    if (-not $productId) { return }
 
-    $state.Status = "Удаление WinFsp..."
-    $state.Detail = "Требуются права администратора"
-    $state.Block  = "Setup.ps1 -> Uninstall-WinFsp -> MSI Uninstall"
-    $state.Percent = 50
+    if (-not $productId) {
+        if ($state) {
+            $state.Status  = "WinFsp уже удалён или не найден"
+            $state.Percent = 100
+        }
+        return
+    }
 
-    $proc = Start-Process "msiexec.exe" -ArgumentList "/x $productId /passive /norestart" `
-        -Verb RunAs -Wait -PassThru
-    $state.Status  = "WinFsp удален"
-    $state.Percent = 100
+    if ($state) {
+        $state.Status  = "Удаление WinFsp..."
+        $state.Detail  = "Требуются права администратора"
+        $state.Block   = "Setup.ps1 -> Uninstall-WinFsp -> MSI Uninstall"
+        $state.Percent = 30
+    }
+
+    try {
+        $proc = Start-Process "msiexec.exe" -ArgumentList "/x $productId /passive /norestart" `
+            -Verb RunAs -Wait -PassThru -ErrorAction Stop
+
+        if ($proc.ExitCode -ne 0 -and $proc.ExitCode -ne 3010) {
+            throw "msiexec завершился с кодом $($proc.ExitCode)"
+        }
+
+        if ($state) {
+            $state.Status  = "WinFsp успешно удалён"
+            $state.Percent = 100
+        }
+    }
+    catch {
+        if ($state) {
+            $state.Error = "Не удалось удалить WinFsp: $($_.Exception.Message)"
+        }
+        throw
+    }
 }
 
 # --- Save rclone config ---
@@ -234,6 +286,8 @@ function Install-ContextMenu {
     $keys = Get-S3Keys
     if (-not $keys) { throw "Ключи S3 не найдены в конфиге rclone!" }
 
+	$state = Protect-State
+
     $vbsPath = Ensure-VbsLauncher
     $dl = $script:DRIVE_LETTER
 
@@ -266,6 +320,9 @@ function Install-ContextMenu {
 }
 
 function Uninstall-ContextMenu {
+	
+	$state = Protect-State
+	
     $state.Status  = "Удаление контекстного меню..."
     $state.Block   = "Setup.ps1 -> Uninstall-ContextMenu"
     $state.Percent = 30
@@ -476,6 +533,9 @@ function Do-ToggleAcl([string]$Path) {
 
 # --- Full uninstall (runs inside background task) ---
 function Do-FullUninstallWork {
+	
+	$state = Protect-State
+	
     $state.Status  = "Отключение диска..."
     $state.Block   = "Setup.ps1 -> Do-FullUninstallWork -> Unmount"
     $state.Percent = 5
@@ -517,6 +577,9 @@ function Do-FullUninstallWork {
 }
 
 function Do-FullUninstallRcloneConfig([bool]$DeleteAll) {
+	
+	$state = Protect-State
+	
     if ($DeleteAll) {
         $state.Status  = "Удаление конфигурации rclone..."
         $state.Block   = "Setup.ps1 -> Uninstall -> RcloneConfigAll"
@@ -533,6 +596,9 @@ function Do-FullUninstallRcloneConfig([bool]$DeleteAll) {
 }
 
 function Do-FullUninstallRcloneExe {
+	
+	$state = Protect-State
+	
     $state.Status  = "Удаление rclone..."
     $state.Block   = "Setup.ps1 -> Uninstall -> RcloneExe"
     $state.Percent = 65
@@ -540,6 +606,9 @@ function Do-FullUninstallRcloneExe {
 }
 
 function Do-FullUninstallWinFsp {
+	
+	$state = Protect-State
+	
     $state.Status  = "Удаление WinFsp..."
     $state.Block   = "Setup.ps1 -> Uninstall -> WinFsp"
     $state.Percent = 80
