@@ -92,15 +92,15 @@ EndlessDisk/
 
 ```powershell
 # GUI-менеджер (по умолчанию)
-powershell -ExecutionPolicy Bypass -File "VKDiskMenu.ps1"
-powershell -ExecutionPolicy Bypass -File "VKDiskMenu.ps1" gui
+powershell -ExecutionPolicy Bypass -File "EndlessDisk.ps1"
+powershell -ExecutionPolicy Bypass -File "EndlessDisk.ps1" gui
 
 # Тихое монтирование (для автозапуска)
-powershell -ExecutionPolicy Bypass -File "VKDiskMenu.ps1" mount
+powershell -ExecutionPolicy Bypass -File "EndlessDisk.ps1" mount
 
 # Контекстное меню (вызывается автоматически из ПКМ)
-powershell -ExecutionPolicy Bypass -File "VKDiskMenu.ps1" copylink "C:\path\file.txt"
-powershell -ExecutionPolicy Bypass -File "VKDiskMenu.ps1" toggleacl "C:\path\file.txt"
+powershell -ExecutionPolicy Bypass -File "EndlessDisk.ps1" copylink "C:\path\file.txt"
+powershell -ExecutionPolicy Bypass -File "EndlessDisk.ps1" toggleacl "C:\path\file.txt"
 ```
 
 ## Удаление
