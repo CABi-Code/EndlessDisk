@@ -1,4 +1,4 @@
-﻿# ============================================================
+# ============================================================
 # EndlessDisk — Core: Config, Logging, GUI Helpers, Crypto, S3
 # ============================================================
 
@@ -57,9 +57,12 @@ Update-GlobalVars
 $script:LogFile = Join-Path $env:TEMP "EndlessDisk.log"
 function Log {
     param([string]$Text)
-    try { "[$(Get-Date -Format 'HH:mm:ss.fff')] $Text" |
-          Out-File -Append -FilePath $script:LogFile -Encoding UTF8 } catch {}
+    try { 
+        $line = "[$(Get-Date -Format 'HH:mm:ss.fff')] $Text"
+        $line | Out-File -Append -FilePath $script:LogFile -Encoding UTF8 -Force
+    } catch {}
 }
+
 
 # --- GUI bootstrap ---
 Add-Type -AssemblyName System.Windows.Forms
@@ -75,7 +78,7 @@ function Show-YesNo {
     return ([System.Windows.Forms.MessageBox]::Show($Text, $Title, "YesNo", "Question") -eq "Yes")
 }
 
-# --- Async background task ---
+# --- Async background task (FIXED v2 — полный InitialSessionState) ---
 $script:bgState = [hashtable]::Synchronized(@{
     Running    = $false
     Status     = ""
@@ -89,9 +92,8 @@ $script:bgState = [hashtable]::Synchronized(@{
 $script:bgRunspace = $null
 
 function Start-BackgroundTask {
-    param(
-        [scriptblock]$Work
-    )
+    param([scriptblock]$Work)
+
     if ($script:bgState.Running) { return $false }
 
     $script:bgState.Running = $true
@@ -103,19 +105,44 @@ function Start-BackgroundTask {
     $script:bgState.Block   = ""
     $script:bgState.Percent = -1
 
-    $rs = [runspacefactory]::CreateRunspace()
+    $iss = [System.Management.Automation.Runspaces.InitialSessionState]::CreateDefault2()
+    $rs = [runspacefactory]::CreateRunspace($iss)
     $rs.ApartmentState = "STA"
     $rs.Open()
+
     $rs.SessionStateProxy.SetVariable("state", $script:bgState)
-    $rs.SessionStateProxy.SetVariable("work", $Work)
+
+    if ($script:LibDir) {
+        $rs.SessionStateProxy.SetVariable("libDir", $script:LibDir)
+    }
 
     $ps = [powershell]::Create()
     $ps.Runspace = $rs
+
     [void]$ps.AddScript({
-        try   { & $work }
-        catch { $state.Error = $_.Exception.Message }
-        finally { $state.Done = $true }
-    })
+        param($state, $work, $libDir)
+
+        if ($libDir) {
+            . (Join-Path $libDir "Core.ps1")
+            . (Join-Path $libDir "Setup.ps1")
+        }
+
+        $Global:state = $state
+        $script:state = $state
+
+        try { 
+            & $work 
+        }
+        catch { 
+            if ($state) {
+                $state.Error = $_.Exception.Message + "`n" + $_.ScriptStackTrace 
+            }
+        }
+        finally { 
+            if ($state) { $state.Done = $true }
+        }
+    }).AddArgument($script:bgState).AddArgument($Work).AddArgument($script:LibDir)
+
     $async = $ps.BeginInvoke()
     $script:bgRunspace = @{ PS = $ps; RS = $rs; Async = $async }
     return $true
@@ -271,9 +298,15 @@ function Find-WinFsp {
 }
 
 function Get-WinFspUninstallId {
+    if (-not $state) { $state = $Global:state }
+    if (-not $state) { $state = $script:state }
+
     $items = Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*" -ErrorAction SilentlyContinue
     $wf = $items | Where-Object { $_.DisplayName -like "*WinFsp*" } | Select-Object -First 1
-    if ($wf) { return $wf.PSChildName }
+
+    if ($wf) {
+        return $wf.PSChildName
+    }
     return $null
 }
 
