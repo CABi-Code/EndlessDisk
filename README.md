@@ -64,11 +64,12 @@ powershell -ExecutionPolicy Bypass -File "C:\EndlessDisk\VKDiskMenu.ps1"
 
 ```
 EndlessDisk/
-├── VKDiskMenu.ps1      # Точка входа (загрузчик модулей)
+├── EndlessDisk.ps1       # Точка входа (загрузчик модулей)
 ├── lib/
-│   ├── Core.ps1        # Конфигурация, логирование, GUI-хелперы, S3
-│   ├── Setup.ps1       # Установка/удаление компонентов, монтирование
-│   └── MainForm.ps1    # Главное окно GUI
+│   ├── Core.ps1          # Конфигурация, логирование, GUI-хелперы, S3
+│   ├── Setup.ps1         # Установка/удаление компонентов, монтирование
+│   ├── MainForm.ps1      # Главное окно GUI
+│   └── EndlessDisk.vbs   # Загрузчик интерфейса (создаваемый)
 ├── README.md
 ```
 
