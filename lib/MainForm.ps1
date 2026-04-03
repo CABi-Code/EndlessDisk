@@ -616,11 +616,25 @@ function Show-MainGui {
             }
         }
     })
+	
+    # Событие: Главное окно показано
+    $form.Add_Shown({
+        Get-Process powershell -ErrorAction SilentlyContinue | Where-Object { 
+            $_.MainWindowTitle -eq "ED_SPLASH" 
+        } | Stop-Process -Force -ErrorAction SilentlyContinue
+		
+        $this.Activate()
+        $this.Focus()
+    })
 
     # ---- Init & Show ----
     & $updateStatus
     $pollTimer.Start()
+    
+    # Запуск основного интерфейса
     $form.ShowDialog() | Out-Null
+    
+    # Очистка после закрытия программы
     $pollTimer.Stop()
     $pollTimer.Dispose()
     $form.Dispose()
