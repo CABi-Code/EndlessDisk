@@ -1,4 +1,4 @@
-# ============================================================
+﻿# ============================================================
 # EndlessDisk — Core: Config, Logging, GUI Helpers, Crypto, S3
 # ============================================================
 
@@ -92,7 +92,10 @@ $script:bgState = [hashtable]::Synchronized(@{
 $script:bgRunspace = $null
 
 function Start-BackgroundTask {
-    param([scriptblock]$Work)
+    param(
+        [scriptblock]$Work,
+        [hashtable]$Arguments
+    )
 
     if ($script:bgState.Running) { return $false }
 
@@ -105,7 +108,7 @@ function Start-BackgroundTask {
     $script:bgState.Block   = ""
     $script:bgState.Percent = -1
 
-    $iss = [System.Management.Automation.Runspaces.InitialSessionState]::CreateDefault2()
+    $iss = [System.Management.Automation.Runspaces.InitialSessionState]::CreateDefault()
     $rs = [runspacefactory]::CreateRunspace($iss)
     $rs.ApartmentState = "STA"
     $rs.Open()
@@ -116,11 +119,17 @@ function Start-BackgroundTask {
         $rs.SessionStateProxy.SetVariable("libDir", $script:LibDir)
     }
 
+    if ($Arguments) {
+        $rs.SessionStateProxy.SetVariable("taskArgs", $Arguments)
+    }
+
+    $workText = $Work.ToString()
+
     $ps = [powershell]::Create()
     $ps.Runspace = $rs
 
     [void]$ps.AddScript({
-        param($state, $work, $libDir)
+        param($state, $workText, $libDir)
 
         $Global:state = $state
         $script:state = $state
@@ -133,18 +142,20 @@ function Start-BackgroundTask {
         $Global:state = $state
         $script:state = $state
 
+        $workBlock = [scriptblock]::Create($workText)
+
         try {
-            & $work
+            & $workBlock
         }
-        catch { 
+        catch {
             if ($state) {
-                $state.Error = $_.Exception.Message + "`n" + $_.ScriptStackTrace 
+                $state.Error = $_.Exception.Message + "`n" + $_.ScriptStackTrace
             }
         }
-        finally { 
+        finally {
             if ($state) { $state.Done = $true }
         }
-    }).AddArgument($script:bgState).AddArgument($Work).AddArgument($script:LibDir)
+    }).AddArgument($script:bgState).AddArgument($workText).AddArgument($script:LibDir)
 
     $async = $ps.BeginInvoke()
     $script:bgRunspace = @{ PS = $ps; RS = $rs; Async = $async }
@@ -301,14 +312,13 @@ function Find-WinFsp {
 }
 
 function Get-WinFspUninstallId {
-    if (-not $state) { $state = $Global:state }
-    if (-not $state) { $state = $script:state }
-
     $items = Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*" -ErrorAction SilentlyContinue
-    $wf = $items | Where-Object { $_.DisplayName -like "*WinFsp*" } | Select-Object -First 1
+    if (-not $items) { return $null }
 
-    if ($wf) {
-        return $wf.PSChildName
+    foreach ($item in $items) {
+        if ($item.DisplayName -and $item.DisplayName -like "*WinFsp*") {
+            return $item.PSChildName
+        }
     }
     return $null
 }

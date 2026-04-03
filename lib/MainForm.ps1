@@ -1,4 +1,4 @@
-# ============================================================
+﻿# ============================================================
 # EndlessDisk — Main GUI Form (async, non-blocking)
 # ============================================================
 
@@ -404,7 +404,7 @@ function Show-MainGui {
         $script:stState.Done    = $false
         $script:stState.Result  = $null
 
-        $iss = [System.Management.Automation.Runspaces.InitialSessionState]::CreateDefault2()
+        $iss = [System.Management.Automation.Runspaces.InitialSessionState]::CreateDefault()
         $rs = [runspacefactory]::CreateRunspace($iss)
         $rs.ApartmentState = "STA"
         $rs.Open()
@@ -444,7 +444,7 @@ function Show-MainGui {
     $script:uninstallPhase = 0
 
     $runAsync = {
-        param([scriptblock]$Work, [string]$Label, [scriptblock]$OnDone)
+        param([scriptblock]$Work, [string]$Label, [scriptblock]$OnDone, [hashtable]$Arguments)
         if ($script:bgState.Running) {
             Show-Msg "EndlessDisk" "Дождитесь завершения текущей операции." "Warning"
             return
@@ -456,7 +456,7 @@ function Show-MainGui {
         $lblStatusText.Text = $Label
         $lblStatusText.ForeColor = $cWarn
         $script:onDoneCallback = $OnDone
-        Start-BackgroundTask -Work $Work
+        Start-BackgroundTask -Work $Work -Arguments $Arguments
     }
 
     # ---- POLL TIMER ----
@@ -676,16 +676,22 @@ function Show-MainGui {
                 $deleteWinFsp = Show-YesNo "EndlessDisk — WinFsp" "Удалить WinFsp?"
             }
 
+            $uninstallArgs = @{
+                DeleteAll       = [bool]$deleteAll
+                DeleteRcloneExe = [bool]$deleteRcloneExe
+                DeleteWinFsp    = [bool]$deleteWinFsp
+            }
+
             & $runAsync {
-                Do-FullUninstallRcloneConfig $deleteAll
-                if ($deleteRcloneExe) { Do-FullUninstallRcloneExe }
-                if ($deleteWinFsp) { Do-FullUninstallWinFsp }
+                Do-FullUninstallRcloneConfig $taskArgs.DeleteAll
+                if ($taskArgs.DeleteRcloneExe) { Do-FullUninstallRcloneExe }
+                if ($taskArgs.DeleteWinFsp) { Do-FullUninstallWinFsp }
                 $state.Status  = "Удаление завершено"
                 $state.Percent = 100
             } "Завершение удаления..." {
                 Show-Msg "EndlessDisk" "Программа полностью удалена.`n`nФайл VKDiskMenu.ps1 можно удалить вручную."
                 $form.Close()
-            }
+            } $uninstallArgs
         }
     })
 	

@@ -1,4 +1,4 @@
-# ============================================================
+﻿# ============================================================
 # EndlessDisk — Setup: Install, Uninstall, Mount, Autostart
 # ============================================================
 
@@ -600,7 +600,7 @@ function Do-FullUninstallWork {
     $state.Result = @{ Phase = "config_question" }
 }
 
-function Do-FullUninstallRcloneConfig([bool]$DeleteAll) {
+function Do-FullUninstallRcloneConfig($DeleteAll) {
 	
 	$state = Protect-State
 	
