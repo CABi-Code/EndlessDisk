@@ -4,19 +4,20 @@
 
 # --- Config management ---
 $script:AppName    = "EndlessDisk"
-$script:AppVersion = "8.1"
+$script:AppVersion = "8.4"   # обновлена версия
 $script:ConfigDir  = Join-Path $env:APPDATA $script:AppName
 $script:ConfigFile = Join-Path $script:ConfigDir "config.json"
 
 $script:DefaultConfig = @{
-    Domain       = "storage.cabi.world"
-    Bucket       = "vk-disk"
-    DriveLetter  = "V:"
-    RcloneRemote = "VKDisk"
-    EndpointHost = "hb.bizmrg.com"
-    Region       = "ru-msk"
-    CacheSize    = "20G"
-    Transfers    = 16
+    Domain           = "storage.cabi.world"
+    Bucket           = "vk-disk"
+    DriveLetter      = "V:"
+    RcloneRemote     = "VKDisk"
+    EndpointHost     = "hb.bizmrg.com"
+    Region           = "ru-msk"
+    CacheSize        = "20G"
+    Transfers        = 16
+    DisplayedSize    = "1024G" 
 }
 
 function Load-Config {
@@ -92,70 +93,69 @@ $script:bgState = [hashtable]::Synchronized(@{
 $script:bgRunspace = $null
 
 function Start-BackgroundTask {
-    param(
-        [scriptblock]$Work,
-        [hashtable]$Arguments
-    )
+    param([scriptblock]$Work)
 
-    if ($script:bgState.Running) { return $false }
+    if ($script:bgState.Running) { 
+        Show-Msg "EndlessDisk" "Предыдущая операция ещё выполняется. Подождите." "Warning"
+        return $false 
+    }
 
     $script:bgState.Running = $true
     $script:bgState.Done    = $false
     $script:bgState.Error   = $null
     $script:bgState.Result  = $null
-    $script:bgState.Status  = ""
+    $script:bgState.Status  = "Запуск задачи..."
     $script:bgState.Detail  = ""
-    $script:bgState.Block   = ""
-    $script:bgState.Percent = -1
+    $script:bgState.Block   = "Start-BackgroundTask-Final"
+    $script:bgState.Percent = 0
 
-    $iss = [System.Management.Automation.Runspaces.InitialSessionState]::CreateDefault()
+    $iss = [System.Management.Automation.Runspaces.InitialSessionState]::CreateDefault2()
     $rs = [runspacefactory]::CreateRunspace($iss)
     $rs.ApartmentState = "STA"
+    $rs.ThreadOptions = "ReuseThread"
     $rs.Open()
 
-    $rs.SessionStateProxy.SetVariable("state", $script:bgState)
-
-    if ($script:LibDir) {
-        $rs.SessionStateProxy.SetVariable("libDir", $script:LibDir)
-    }
-
-    if ($Arguments) {
-        $rs.SessionStateProxy.SetVariable("taskArgs", $Arguments)
-    }
-
-    $workText = $Work.ToString()
+    # Передаём state через аргумент + SessionStateProxy (максимальная надёжность)
+    $rs.SessionStateProxy.SetVariable("passedState", $script:bgState)
 
     $ps = [powershell]::Create()
     $ps.Runspace = $rs
 
-    [void]$ps.AddScript({
-        param($state, $workText, $libDir)
+    $innerScript = {
+        param($Work, $libDir, $passedState)
 
-        $Global:state = $state
-        $script:state = $state
+        # Самая агрессивная фиксация состояния
+        $Global:state = $passedState
+        $script:state = $passedState
+        $state        = $passedState
+
+        $debugInfo = "Runspace-Debug-Final: passedState=$($null -ne $passedState) | state=$($null -ne $state) | script:state=$($null -ne $script:state) | Global:state=$($null -ne $Global:state) | RunspaceId=$([runspace]::DefaultRunspace.InstanceId) | ThreadId=$([System.Threading.Thread]::CurrentThread.ManagedThreadId) | PSVersion=$($PSVersionTable.PSVersion) | Line=$($MyInvocation.ScriptLineNumber)"
+
+        if (-not $state -or -not ($state -is [hashtable])) {
+            throw "CRITICAL: State completely lost in runspace! $debugInfo"
+        }
 
         if ($libDir) {
             . (Join-Path $libDir "Core.ps1")
             . (Join-Path $libDir "Setup.ps1")
         }
 
-        $Global:state = $state
-        $script:state = $state
-
-        $workBlock = [scriptblock]::Create($workText)
-
         try {
-            & $workBlock
+            & $Work
         }
         catch {
-            if ($state) {
-                $state.Error = $_.Exception.Message + "`n" + $_.ScriptStackTrace
-            }
+            if ($state) { $state.Error = $_.Exception.Message + "`n" + $_.ScriptStackTrace }
+            throw
         }
         finally {
             if ($state) { $state.Done = $true }
         }
-    }).AddArgument($script:bgState).AddArgument($workText).AddArgument($script:LibDir)
+    }
+
+    [void]$ps.AddScript($innerScript)
+    [void]$ps.AddArgument($Work)
+    [void]$ps.AddArgument($script:LibDir)
+    [void]$ps.AddArgument($script:bgState)   # <-- передаём как аргумент
 
     $async = $ps.BeginInvoke()
     $script:bgRunspace = @{ PS = $ps; RS = $rs; Async = $async }
@@ -165,8 +165,11 @@ function Start-BackgroundTask {
 function Complete-BackgroundTask {
     if (-not $script:bgRunspace) { return }
     try { $script:bgRunspace.PS.EndInvoke($script:bgRunspace.Async) } catch {}
-    $script:bgRunspace.PS.Dispose()
-    $script:bgRunspace.RS.Close()
+    try { $script:bgRunspace.PS.Dispose() } catch {}
+    try { 
+        $script:bgRunspace.RS.Close()
+        $script:bgRunspace.RS.Dispose()
+    } catch {}
     $script:bgRunspace = $null
     $script:bgState.Running = $false
 }
@@ -312,13 +315,14 @@ function Find-WinFsp {
 }
 
 function Get-WinFspUninstallId {
-    $items = Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*" -ErrorAction SilentlyContinue
-    if (-not $items) { return $null }
+    if (-not $state) { $state = $Global:state }
+    if (-not $state) { $state = $script:state }
 
-    foreach ($item in $items) {
-        if ($item.DisplayName -and $item.DisplayName -like "*WinFsp*") {
-            return $item.PSChildName
-        }
+    $items = Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*" -ErrorAction SilentlyContinue
+    $wf = $items | Where-Object { $_.DisplayName -like "*WinFsp*" } | Select-Object -First 1
+
+    if ($wf) {
+        return $wf.PSChildName
     }
     return $null
 }
@@ -370,6 +374,26 @@ function Get-ObjectKey([string]$FullPath) {
 function Get-PublicUrl([string]$ObjectKey) {
     $enc = ($ObjectKey -split "/" | ForEach-Object { [Uri]::EscapeDataString($_) }) -join "/"
     return "https://$($script:DOMAIN)/$enc"
+}
+
+function Get-BucketUsage {
+    $rclone = Find-Rclone
+    if (-not $rclone -or -not $script:RCLONE_REMOTE -or -not $script:BUCKET) { return $null }
+
+    try {
+        # --fast-list значительно ускоряет подсчёт на больших бакетах
+        $jsonOut = & $rclone size "$($script:RCLONE_REMOTE):$($script:BUCKET)" --json --fast-list 2>$null
+        if ($jsonOut) {
+            $data = $jsonOut | ConvertFrom-Json
+            $totalGB = [Math]::Round($data.totalSize / 1GB, 2)
+            return @{
+                TotalGB    = $totalGB
+                Objects    = $data.objects
+                TotalBytes = $data.totalSize
+            }
+        }
+    } catch { }
+    return $null
 }
 
 # --- Crypto ---

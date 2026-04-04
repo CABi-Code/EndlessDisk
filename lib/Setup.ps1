@@ -8,7 +8,8 @@ function Write-VbsLauncher([string]$VbsPath) {
 Dim mode, filePath, cmd, ps1, fso
 Set objShell = CreateObject("WScript.Shell")
 Set fso = CreateObject("Scripting.FileSystemObject")
-ps1 = fso.BuildPath(fso.GetParentFolderName(fso.GetParentFolderName(WScript.ScriptFullName)), fso.GetBaseName(WScript.ScriptFullName) & ".ps1")
+' Исправлено: VBS и PS1 лежат в одной папке
+ps1 = fso.BuildPath(fso.GetParentFolderName(WScript.ScriptFullName), fso.GetBaseName(WScript.ScriptFullName) & ".ps1")
 mode = "" : filePath = ""
 If WScript.Arguments.Count >= 1 Then mode = WScript.Arguments(0)
 If WScript.Arguments.Count >= 2 Then filePath = WScript.Arguments(1)
@@ -32,203 +33,387 @@ function Ensure-VbsLauncher {
 
 
 function Protect-State {
-    if (-not $state) {
-        $state = $Global:state
-        if (-not $state) { $state = $script:state }
-        if (-not $state) {
-            throw "CRITICAL: state variable is lost in background task!`nСообщи разработчику."
-        }
-    }
-    return $state
+    $debug = "Debug-Protect-Final: `$state=$($null -ne $state) | `$script:state=$($null -ne $script:state) | `$Global:state=$($null -ne $Global:state) | Line=$($MyInvocation.ScriptLineNumber) | Caller=$($MyInvocation.MyCommand.Name) | PSVersion=$($PSVersionTable.PSVersion) | RunspaceId=$([runspace]::DefaultRunspace.InstanceId) | ThreadId=$([System.Threading.Thread]::CurrentThread.ManagedThreadId)"
+
+    if ($state -and $state -is [hashtable]) { return $state }
+    if ($script:state -and $script:state -is [hashtable]) { $state = $script:state; return $state }
+    if ($Global:state -and $Global:state -is [hashtable]) { $state = $Global:state; $script:state = $Global:state; return $state }
+
+    throw "CRITICAL: state variable is lost in background task!`nСообщи разработчику.`n$debug"
 }
 
 
-# --- Install rclone ---
+# --- Install Rclone ---
 function Install-RcloneAuto {
-	
-	$state = Protect-State
+    param($PassedState)
+    if (-not $PassedState) { $PassedState = $script:bgState }
+    $state = $PassedState
 
-    $rclone = Find-Rclone
-    if ($rclone) { return $rclone }
+    # Проверка наличия rclone через прямой поиск файла (замена Find-Rclone)
+    $destDir = [System.IO.Path]::Combine($env:LOCALAPPDATA, "rclone")
+    $exePath = [System.IO.Path]::Combine($destDir, "rclone.exe")
+    if ([System.IO.File]::Exists($exePath)) { 
+        $state.Status = "rclone уже установлен"
+        $state.Percent = 100
+        return $true 
+    }
 
-    $destDir = Join-Path $env:LOCALAPPDATA "rclone"
+    # Папка проекта для хранения дистрибутива
+    $workDir = [System.IO.Path]::Combine($PSScriptRoot, "bin")
+    if (-not [System.IO.Directory]::Exists($workDir)) { 
+        [System.IO.Directory]::CreateDirectory($workDir) | Out-Null 
+    }
+    
+    $zipPath = [System.IO.Path]::Combine($workDir, "rclone-windows-amd64.zip")
     $zipUrl  = "https://downloads.rclone.org/rclone-current-windows-amd64.zip"
 
-    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-    $state.Status  = "Скачивание rclone..."
-    $state.Detail  = $zipUrl
-    $state.Block   = "Setup.ps1 -> Install-RcloneAuto -> Download"
-    $state.Percent = 10
-
-    $tempZip = Join-Path $env:TEMP "rclone-install.zip"
-    Invoke-WebRequest -Uri $zipUrl -OutFile $tempZip -UseBasicParsing
-
-    $state.Status  = "Распаковка rclone..."
-    $state.Detail  = "Извлечение файлов"
-    $state.Block   = "Setup.ps1 -> Install-RcloneAuto -> Extract"
-    $state.Percent = 50
-
-    $tempExtract = Join-Path $env:TEMP "rclone-extract"
-    if (Test-Path $tempExtract) { Remove-Item $tempExtract -Recurse -Force }
-    Expand-Archive -Path $tempZip -DestinationPath $tempExtract -Force
-
-    $rcloneDir = Get-ChildItem $tempExtract -Directory | Select-Object -First 1
-    if (-not (Test-Path $destDir)) { New-Item $destDir -ItemType Directory -Force | Out-Null }
-
-    $state.Status  = "Копирование rclone.exe..."
-    $state.Detail  = $destDir
-    $state.Block   = "Setup.ps1 -> Install-RcloneAuto -> Copy"
-    $state.Percent = 80
-
-    Copy-Item (Join-Path $rcloneDir.FullName "rclone.exe") (Join-Path $destDir "rclone.exe") -Force
-    Remove-Item $tempZip -Force -ErrorAction SilentlyContinue
-    Remove-Item $tempExtract -Recurse -Force -ErrorAction SilentlyContinue
-
-    $state.Status  = "rclone установлен"
-    $state.Percent = 100
-    return (Join-Path $destDir "rclone.exe")
-}
-
-# --- Uninstall rclone ---
-function Uninstall-Rclone {
-
-	$state = Protect-State
-
-    $state.Status = "Остановка rclone..."
-    $state.Block  = "Setup.ps1 -> Uninstall-Rclone -> StopProcess"
-    $state.Percent = 10
-    Get-Process rclone -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-    Start-Sleep -Seconds 2
-
-    $state.Status = "Удаление rclone..."
-    $state.Block  = "Setup.ps1 -> Uninstall-Rclone -> RemoveFiles"
-    $state.Percent = 40
-
-    $locations = @(
-        (Join-Path $env:LOCALAPPDATA "rclone"),
-        "C:\rclone"
-    )
-    $scriptDir = Split-Path -Parent $PSCommandPath
-    if ($scriptDir) {
-        $localExe = Join-Path $scriptDir "rclone.exe"
-        if (Test-Path $localExe) { Remove-Item $localExe -Force -ErrorAction SilentlyContinue }
-    }
-    foreach ($loc in $locations) {
-        if (Test-Path $loc) {
-            Remove-Item $loc -Recurse -Force -ErrorAction SilentlyContinue
+    # --- 1. СКАЧИВАНИЕ (.NET WebClient) ---
+    if (-not [System.IO.File]::Exists($zipPath)) {
+        $state.Status = "Загрузка rclone..."
+        $state.Percent = 10
+        $webClient = $null
+        try {
+            $state.Block = "Источник: downloads.rclone.org"
+            [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+            $webClient = New-Object System.Net.WebClient
+            $webClient.DownloadFile($zipUrl, $zipPath)
+        } catch {
+            $state.Error = "Ошибка загрузки rclone: $($_.Exception.Message)"
+            return $false
+        } finally {
+            if ($null -ne $webClient) { $webClient.Dispose() }
         }
     }
-    $state.Status = "rclone удален"
+
+    # --- 2. РАСПАКОВКА (.NET ZipFile) ---
+    $state.Status = "Распаковка архива..."
+    $state.Percent = 40
+    $tempExtract = [System.IO.Path]::Combine([System.IO.Path]::GetTempPath(), "rclone_temp_$(Get-Random)")
+    
+    try {
+        if ([System.IO.Directory]::Exists($tempExtract)) { 
+            [System.IO.Directory]::Delete($tempExtract, $true) 
+        }
+        [System.IO.Directory]::CreateDirectory($tempExtract) | Out-Null
+        
+        $state.Block = "Распаковка в временную папку..."
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        [System.IO.Compression.ZipFile]::ExtractToDirectory($zipPath, $tempExtract)
+        
+        $state.Block = "Архив успешно извлечен"
+    } catch {
+        $state.Error = "Ошибка распаковки: $($_.Exception.Message)"
+        return $false
+    }
+
+    # --- 3. КОПИРОВАНИЕ ФАЙЛОВ ---
+    $state.Status = "Установка исполняемых файлов..."
+    $state.Percent = 70
+    if (-not [System.IO.Directory]::Exists($destDir)) { 
+        [System.IO.Directory]::CreateDirectory($destDir) | Out-Null 
+    }
+
+    # Ищем вложенную папку rclone-v*-windows-amd64
+    $extractedDirs = [System.IO.Directory]::GetDirectories($tempExtract)
+    if ($extractedDirs.Length -gt 0) {
+        $rcloneSourceDir = $extractedDirs[0]
+        $files = [System.IO.Directory]::GetFiles($rcloneSourceDir)
+        
+        $totalFiles = $files.Count
+        $currentFile = 0
+
+        foreach ($filePath in $files) {
+            $currentFile++
+            $fileName = [System.IO.Path]::GetFileName($filePath)
+            $state.Block = "Копирование: $fileName"
+            
+            $targetPath = [System.IO.Path]::Combine($destDir, $fileName)
+            [System.IO.File]::Copy($filePath, $targetPath, $true)
+            
+            $state.Percent = 70 + [int](($currentFile / $totalFiles) * 20)
+            [System.Threading.Thread]::Sleep(800) # Даем пользователю увидеть прогресс
+        }
+    }
+
+    # Очистка временной папки через .NET
+    if ([System.IO.Directory]::Exists($tempExtract)) { 
+        [System.IO.Directory]::Delete($tempExtract, $true) 
+    }
+
+    $state.Status = "rclone успешно установлен"
+    $state.Block  = "Путь: $destDir"
+    $state.Percent = 100
+    return $true
+}
+
+# --- Uninstall Rclone ---
+function Uninstall-Rclone {
+    param($PassedState)
+    if (-not $PassedState) { $PassedState = $script:bgState }
+    $state = $PassedState
+
+    # 1. Остановка процессов
+    $state.Status = "Завершение процессов rclone..."
+    $state.Percent = 10
+    $procs = Get-Process rclone -ErrorAction SilentlyContinue
+    if ($procs) {
+        foreach ($p in $procs) {
+            $state.Block = "Остановка PID: $($p.Id)"
+            $p | Stop-Process -Force -ErrorAction SilentlyContinue
+        }
+        [System.Threading.Thread]::Sleep(2000)
+    }
+
+    # --- 2. Удаление файлов (Защищенная версия) ---
+    $state.Status = "Очистка файлов rclone..."
+    $state.Percent = 40
+    
+    $locations = @(
+        [System.IO.Path]::Combine($env:LOCALAPPDATA, "rclone"),
+        "C:\rclone"
+    )
+
+    foreach ($loc in $locations) {
+        if (-not [string]::IsNullOrWhiteSpace($loc) -and [System.IO.Directory]::Exists($loc)) {
+            try {
+                $state.Block = "Полное удаление: $loc"
+                
+                # -Recurse удаляет вложенные папки
+                # -Force удаляет файлы только для чтения
+                # -Confirm:$false ПРЕДОТВРАЩАЕТ запрос подтверждения, который вызвал ошибку
+                Remove-Item $loc -Recurse -Force -Confirm:$false -ErrorAction SilentlyContinue
+                
+                # Если стандартный метод не сработал (папка занята), пробуем через .NET
+                if ([System.IO.Directory]::Exists($loc)) {
+                    [System.IO.Directory]::Delete($loc, $true)
+                }
+            } catch {
+                $state.Block = "Ошибка доступа к $loc (возможно, файл занят)"
+            }
+            [System.Threading.Thread]::Sleep(1000)
+        }
+    }
+
+    $state.Status = "rclone полностью удален"
+    $state.Block  = "Система очищена"
     $state.Percent = 100
 }
 
 # --- Install WinFsp ---
 function Install-WinFspAuto {
-    if (Find-WinFsp) { return $true }
+    param($PassedState)
+    if (-not $PassedState) { $PassedState = $script:bgState }
+    $state = $PassedState
 
-	$state = Protect-State
+    # 1. Проверка установки через реестр
+    $regPath = "SOFTWARE\WinFsp"
+    $isInstalled = [Microsoft.Win32.Registry]::LocalMachine.OpenSubKey($regPath)
+    if ($isInstalled) { 
+        $state.Status = "WinFsp уже установлен"
+        $state.Percent = 100
+        return $true 
+    }
 
-    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-    $state.Status  = "Поиск последней версии WinFsp..."
-    $state.Detail  = "GitHub API"
-    $state.Block   = "Setup.ps1 -> Install-WinFspAuto -> GitHubAPI"
-    $state.Percent = 10
+    $workDir = [System.IO.Path]::Combine($PSScriptRoot, "bin")
+    if (-not [System.IO.Directory]::Exists($workDir)) { [System.IO.Directory]::CreateDirectory($workDir) | Out-Null }
+    $msiPath = [System.IO.Path]::Combine($workDir, "winfsp_installer.msi")
+    $logPath = [System.IO.Path]::Combine($workDir, "install_log.txt")
 
-    $release = Invoke-RestMethod "https://api.github.com/repos/winfsp/winfsp/releases/latest" -UseBasicParsing
-    $msiAsset = $release.assets | Where-Object { $_.name -like "*.msi" } | Select-Object -First 1
-    if (-not $msiAsset) { throw "MSI не найден в последнем релизе WinFsp" }
+    # --- СКАЧИВАНИЕ (Надежный метод через .NET) ---
+    if (-not [System.IO.File]::Exists($msiPath)) {
+        $state.Status = "Загрузка WinFsp с GitHub..."
+        $state.Percent = 10
+        $webClient = $null
+        try {
+            # 1. Получаем данные о релизе (API GitHub)
+            [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+            $apiUrl = "https://github.com"
+            $release = Invoke-RestMethod -Uri $apiUrl -UseBasicParsing
+            
+            $msiAsset = $release.assets | Where-Object { $_.name -like "*.msi" } | Select-Object -First 1
+            if (-not $msiAsset) { throw "MSI-файл не найден в релизе GitHub" }
+            
+            $state.Block = "Файл: $($msiAsset.name) ($([Math]::Round($msiAsset.size / 1MB, 2)) MB)"
+            
+            # 2. Скачивание через .NET (вместо Invoke-WebRequest)
+            $webClient = New-Object System.Net.WebClient
+            $webClient.DownloadFile($msiAsset.browser_download_url, $msiPath)
+            
+            $state.Block = "Загрузка завершена успешно"
+        } catch {
+            $state.Error = "Ошибка загрузки: $($_.Exception.Message)"
+            return $false
+        } finally {
+            if ($null -ne $webClient) { $webClient.Dispose() }
+        }
+        [System.Threading.Thread]::Sleep(500)
+    }
 
-    $state.Status  = "Скачивание WinFsp..."
-    $state.Detail  = $msiAsset.name
-    $state.Block   = "Setup.ps1 -> Install-WinFspAuto -> Download"
+
+    # --- ГЛУБОКАЯ ЧИСТКА ---
+    $state.Status = "Очистка системных блокировок..."
+    $state.Block = "Остановка служб и удаление ключей..."
+    $state.Percent = 20
+    
+    & sc.exe stop WinFsp 2>$null | Out-Null
+    & sc.exe delete WinFsp 2>$null | Out-Null
+    & reg delete "HKLM\SOFTWARE\WinFsp" /f 2>$null | Out-Null
+    & reg delete "HKLM\SOFTWARE\WOW6432Node\WinFsp" /f 2>$null | Out-Null
+    [System.Threading.Thread]::Sleep(1500)
+
+    # --- ЗАПУСК УСТАНОВКИ ---
+    $state.Status = "Запуск инсталлятора WinFsp..."
+    $state.Block = "Ожидание подтверждения UAC (если прошло больше 30 секунд, перезапустите программу)"
     $state.Percent = 30
+    $msiArgs = "/i `"$msiPath`" /qn /norestart ALLUSERS=1 ADDLOCAL=ALL /L*V `"$logPath`""
+    
+    try {
+        $process = Start-Process "msiexec.exe" -ArgumentList $msiArgs -Verb RunAs -PassThru
+    } catch {
+        $state.Error = "Установка отменена пользователем"
+        return $false
+    }
 
-    $tempMsi = Join-Path $env:TEMP $msiAsset.name
-    Invoke-WebRequest -Uri $msiAsset.browser_download_url -OutFile $tempMsi -UseBasicParsing
+    # --- МОНИТОРИНГ (С ЗАЩИТОЙ ОТ ЗАВИСАНИЯ) ---
+    $state.Status = "Установка компонентов..."
+    $startTime = Get-Date
 
-    $state.Status  = "Установка WinFsp..."
-    $state.Detail  = "Требуются права администратора"
-    $state.Block   = "Setup.ps1 -> Install-WinFspAuto -> MSI Install"
-    $state.Percent = 60
+    while ($true) {
+        # 1. Проверяем, не завершился ли процесс
+        if ($process.HasExited) { break }
 
-    $proc = Start-Process "msiexec.exe" -ArgumentList "/i `"$tempMsi`" /passive /norestart" `
-        -Verb RunAs -Wait -PassThru
-    Remove-Item $tempMsi -Force -ErrorAction SilentlyContinue
-    if ($proc.ExitCode -ne 0) { throw "Установщик WinFsp завершился с кодом $($proc.ExitCode)" }
+        # 2. Проверяем, не появился ли реестр (признак успеха)
+        $checkReg = [Microsoft.Win32.Registry]::LocalMachine.OpenSubKey($regPath)
+        if ($checkReg) { 
+            $state.Block = "Реестр WinFsp успешно обновлен"
+            [System.Threading.Thread]::Sleep(2000) # Даем MSI дописать хвосты
+            break 
+        }
 
-    $state.Status  = "WinFsp установлен"
-    $state.Percent = 100
-    return $true
+        # 3. Тайм-аут 3 минуты
+        if (((Get-Date) - $startTime).TotalMinutes -gt 3) { break }
+
+        # 4. Чтение лога
+        if ([System.IO.File]::Exists($logPath)) {
+            try {
+                $fileStream = [System.IO.File]::Open($logPath, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+                $reader = New-Object System.IO.StreamReader($fileStream)
+                $logContent = $reader.ReadToEnd()
+                $reader.Close(); $fileStream.Close()
+
+                $lastAction = $logContent.Split("`n") | Where-Object { $_ -match "Executing op:" } | Select-Object -Last 1
+                if ($lastAction) {
+                    $detail = ($lastAction -replace ".*Executing op: ", "").Trim()
+                    $state.Block = "MSI: $detail"
+                    if ($detail -match "FileCopy|FileMove") { $state.Status = "Копирование файлов..." }
+                    if ($detail -match "ServiceControl")   { $state.Status = "Настройка служб..." }
+                }
+            } catch { }
+        }
+        
+        if ($state.Percent -lt 98) { $state.Percent += 1 }
+        [System.Threading.Thread]::Sleep(1000)
+    }
+
+    # --- ФИНАЛИЗАЦИЯ ---
+    $finalReg = [Microsoft.Win32.Registry]::LocalMachine.OpenSubKey($regPath)
+    if ($finalReg -or $process.ExitCode -in @(0, 3010)) {
+        $state.Status = "WinFsp успешно установлен!"
+        $state.Percent = 100
+        return $true
+    } else {
+        $state.Error = "Ошибка (Код: $($process.ExitCode))"
+        $state.Block = "Проверьте лог в папке bin"
+        return $false
+    }
 }
 
 # --- Uninstall WinFsp ---
 function Uninstall-WinFsp {
-    $state = $Global:state
-    if (-not $state) { $state = $script:state }
+    param($PassedState)
 
-    $productId = Get-WinFspUninstallId
+    if (-not $PassedState) { $PassedState = $script:bgState }
+    $state = $PassedState
 
-    if (-not $productId) {
-        if ($state) {
-            $state.Status  = "WinFsp уже удалён или не найден"
-            $state.Percent = 100
+    # --- 1. Пути через .NET (замена Join-Path и Test-Path) ---
+    $workDir = [System.IO.Path]::Combine($PSScriptRoot, "bin")
+    if (-not [System.IO.Directory]::Exists($workDir)) {
+        [System.IO.Directory]::CreateDirectory($workDir) | Out-Null
+    }
+    
+    $msiPath = [System.IO.Path]::Combine($workDir, "winfsp_installer.msi")
+    $logPath = [System.IO.Path]::Combine($workDir, "uninstall_log.txt")
+
+    # --- 2. Скачивание (если файла нет) ---
+    if (-not [System.IO.File]::Exists($msiPath)) {
+        $state.Status  = "Загрузка MSI для удаления..."
+        $state.Percent = 10
+        try {
+            [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+            $release = Invoke-RestMethod "https://github.com" -UseBasicParsing
+            $msiAsset = $release.assets | Where-Object { $_.name -like "*.msi" } | Select-Object -First 1
+            
+            if ($msiAsset) {
+                Invoke-WebRequest -Uri $msiAsset.browser_download_url -OutFile $msiPath -UseBasicParsing
+            } else { throw "MSI не найден" }
+        } catch {
+            $state.Error = "Ошибка подготовки MSI: $($_.Exception.Message)"
+            return
         }
+    }
+
+    # Очистка старого лога через .NET
+    if ([System.IO.File]::Exists($logPath)) { [System.IO.File]::Delete($logPath) }
+    [System.IO.File]::WriteAllText($logPath, "Starting Uninstall...")
+
+    # --- 3. Запуск MSI (Админ-права) ---
+    $state.Status  = "Запуск деинсталляции..."
+    $state.Percent = 30
+    $msiArgs = "/x `"$msiPath`" /qn /norestart /L*V `"$logPath`""
+    
+    try {
+        $proc = Start-Process "msiexec.exe" -ArgumentList $msiArgs -Verb RunAs -PassThru
+    } catch {
+        $state.Error = "Ошибка запуска (UAC?): $($_.Exception.Message)"
         return
     }
 
-    if ($state) {
-        $state.Status  = "Удаление WinFsp..."
-        $state.Detail  = "Требуются права администратора"
-        $state.Block   = "Setup.ps1 -> Uninstall-WinFsp -> MSI Uninstall"
-        $state.Percent = 30
-    }
-
-    try {
-        $proc = Start-Process "msiexec.exe" -ArgumentList "/x $productId /passive /norestart" `
-            -Verb RunAs -PassThru -ErrorAction Stop
-
-        if ($proc -and -not $proc.HasExited) {
-            $proc.WaitForExit(120000)
-        }
-
-        if ($proc.ExitCode -ne 0 -and $proc.ExitCode -ne 3010) {
-            throw "msiexec завершился с кодом $($proc.ExitCode)"
-        }
-
-        if ($state) {
-            $state.Status  = "Проверка удаления WinFsp..."
-            $state.Percent = 70
-        }
-
-        $waited = 0
-        while ((Find-WinFsp) -and $waited -lt 10) {
-            Start-Sleep -Seconds 1
-            $waited++
-        }
-
-        if (Find-WinFsp) {
-            if ($proc.ExitCode -eq 3010) {
-                if ($state) {
-                    $state.Status  = "WinFsp: требуется перезагрузка"
-                    $state.Percent = 100
+    # --- 4. Чтение лога в реальном времени через .NET ---
+    $state.Status = "Процесс удаления компонентов..."
+    while (-not $proc.HasExited) {
+        if ([System.IO.File]::Exists($logPath)) {
+            try {
+                # Читаем все строки лога
+                $lines = [System.IO.File]::ReadAllLines($logPath)
+                if ($lines.Count -gt 0) {
+                    # Ищем последние действия MSI
+                    $lastAction = $lines | Where-Object { $_ -match "Executing op:" -or $_ -match "Action start" } | Select-Object -Last 1
+                    
+                    if ($lastAction) {
+                        $cleanLine = $lastAction -replace ".*Executing op: ", "" -replace "Action start \d+: ", ""
+                        $state.Block = "MSI: $cleanLine"
+                    }
                 }
-            } else {
-                throw "WinFsp не был полностью удалён. Попробуйте перезагрузить компьютер."
-            }
-        } else {
-            if ($state) {
-                $state.Status  = "WinFsp успешно удалён"
-                $state.Percent = 100
-            }
+            } catch { } # Игнорируем ошибки доступа к файлу во время записи
         }
+        
+        if ($state.Percent -lt 95) { $state.Percent += 1 }
+        [System.Threading.Thread]::Sleep(500) # Замена Start-Sleep
     }
-    catch {
-        if ($state) {
-            $state.Error = "Не удалось удалить WinFsp: $($_.Exception.Message)"
-        }
-        throw
+
+    # --- 5. Завершение ---
+    if ($proc.ExitCode -in @(0, 3010)) {
+        $state.Status  = "WinFsp успешно удален"
+        $state.Block   = "MSI завершен (код 0)"
+        $state.Percent = 100
+        if ([System.IO.File]::Exists($logPath)) { [System.IO.File]::Delete($logPath) }
+    } else {
+        $state.Status  = "Ошибка при удалении"
+        $state.Block   = "MSI Exit Code: $($proc.ExitCode)"
+        $state.Percent = 100
     }
 }
+
 
 # --- Save rclone config ---
 function Save-RcloneConfig([string]$AccessKey, [string]$SecretKey) {
@@ -303,46 +488,85 @@ function Remove-RcloneSection {
     }
 }
 
-# --- Context menu ---
+# --- Context menu Install ---
 function Install-ContextMenu {
-    $scriptPath = $PSCommandPath
-    if (-not $scriptPath) { throw "Запустите из .ps1 файла." }
+    param($PassedState)
+
+    if (-not $PassedState) { $PassedState = $script:bgState }
+    $state = $PassedState
+
+    # --- 1. Подготовка и проверки ---
+    $state.Status = "Подготовка контекстного меню..."
+    $state.Percent = 5
+    
     $keys = Get-S3Keys
-    if (-not $keys) { throw "Ключи S3 не найдены в конфиге rclone!" }
+    if (-not $keys) { 
+        $state.Error = "Ключи S3 не найдены в конфиге rclone!"
+        return 
+    }
 
-	$state = Protect-State
-
+    $state.Block = "Проверка VBS-лаунчера..."
     $vbsPath = Ensure-VbsLauncher
     $dl = $script:DRIVE_LETTER
+    [System.Threading.Thread]::Sleep(300)
 
-    $state.Status  = "Регистрация: Копировать ссылку..."
-    $state.Block   = "Setup.ps1 -> Install-ContextMenu -> CopyLink"
-    $state.Percent = 30
-
+    # --- 2. Регистрация: Копировать ссылку ---
+    $state.Status = "Настройка меню: Копировать ссылку"
+    $state.Percent = 20
+    
     $k1 = "HKCU:\Software\Classes\*\shell\VKDiskCopyLink"
-    New-Item -Path $k1 -Force | Out-Null
+    
+    $state.Block = "Создание раздела: VKDiskCopyLink"
+    if (-not (Test-Path $k1)) { New-Item -Path $k1 -Force | Out-Null }
+    
+    $state.Block = "Установка заголовка: EndlessDisk: Копировать ссылку"
     Set-ItemProperty $k1 "(Default)" "EndlessDisk: Копировать ссылку"
+    
+    $state.Block = "Настройка иконки и фильтра диска ($dl)"
     Set-ItemProperty $k1 "Icon" "shell32.dll,134"
     Set-ItemProperty $k1 "AppliesTo" ('System.ItemPathDisplay:~<"' + $dl + '\"')
-    New-Item -Path "$k1\command" -Force | Out-Null
-    Set-ItemProperty "$k1\command" "(Default)" ('wscript.exe "' + $vbsPath + '" copylink "%1"')
+    
+    $state.Block = "Регистрация команды запуска WScript"
+    $c1 = "$k1\command"
+    if (-not (Test-Path $c1)) { New-Item -Path $c1 -Force | Out-Null }
+    Set-ItemProperty $c1 "(Default)" ('wscript.exe "' + $vbsPath + '" copylink "%1"')
+    
+    $state.Percent = 50
+    [System.Threading.Thread]::Sleep(400)
 
-    $state.Status  = "Регистрация: Открыть/Закрыть доступ..."
-    $state.Block   = "Setup.ps1 -> Install-ContextMenu -> ToggleACL"
-    $state.Percent = 70
-
+    # --- 3. Регистрация: Открыть/Закрыть доступ ---
+    $state.Status = "Настройка меню: Управление доступом"
+    $state.Percent = 60
+    
     $k2 = "HKCU:\Software\Classes\*\shell\VKDiskToggleACL"
-    New-Item -Path $k2 -Force | Out-Null
+    
+    $state.Block = "Создание раздела: VKDiskToggleACL"
+    if (-not (Test-Path $k2)) { New-Item -Path $k2 -Force | Out-Null }
+    
+    $state.Block = "Установка заголовка: EndlessDisk: Доступ"
     Set-ItemProperty $k2 "(Default)" "EndlessDisk: Открыть/Закрыть доступ"
+    
+    $state.Block = "Настройка иконки (Security)"
     Set-ItemProperty $k2 "Icon" "shell32.dll,47"
     Set-ItemProperty $k2 "AppliesTo" ('System.ItemPathDisplay:~<"' + $dl + '\"')
-    New-Item -Path "$k2\command" -Force | Out-Null
-    Set-ItemProperty "$k2\command" "(Default)" ('wscript.exe "' + $vbsPath + '" toggleacl "%1"')
+    
+    $state.Block = "Привязка скрипта к команде"
+    $c2 = "$k2\command"
+    if (-not (Test-Path $c2)) { New-Item -Path $c2 -Force | Out-Null }
+    Set-ItemProperty $c2 "(Default)" ('wscript.exe "' + $vbsPath + '" toggleacl "%1"')
 
-    $state.Status  = "Контекстное меню установлено"
+    # --- 4. Финализация ---
+    $state.Status = "Применение настроек проводника..."
+    $state.Percent = 90
+    $state.Block = "Обновление кэша иконок..."
+    [System.Threading.Thread]::Sleep(500)
+
+    $state.Status  = "Контекстное меню успешно установлено"
+    $state.Block   = "Меню доступно для диска $dl"
     $state.Percent = 100
 }
 
+# --- Context menu Uninstall ---
 function Uninstall-ContextMenu {
 	
 	$state = Protect-State
@@ -383,6 +607,11 @@ function Do-Mount {
         "--transfers", "$xfers",
         "--no-console", "--links"
     )
+	
+	if ($script:Config.DisplayedSize) {
+		$mountArgs += "--vfs-disk-space-total-size", $script:Config.DisplayedSize
+	}
+	
     Log "Mount: $rclone $($mountArgs -join ' ')"
     Start-Process -FilePath $rclone -ArgumentList $mountArgs -WindowStyle Hidden
 }
@@ -450,7 +679,7 @@ function Add-DesktopShortcut {
     $shortcut.TargetPath = "wscript.exe"
     $shortcut.Arguments = "`"$vbs`" gui"
     $shortcut.WorkingDirectory = Split-Path -Parent $PSCommandPath
-    $shortcut.IconLocation = "shell32.dll,134"
+    $shortcut.IconLocation = "shell32.dll,149"
     $shortcut.Description = "EndlessDisk — VK Cloud S3 Manager"
     $shortcut.Save()
 }
@@ -586,7 +815,7 @@ function Do-FullUninstallWork {
     $state.Percent = 35
     $scriptDir = Split-Path -Parent $PSCommandPath
     if ($scriptDir) {
-        $vbs = Join-Path $scriptDir "VKDiskMenu.vbs"
+        $vbs = Join-Path $scriptDir "EndlessDisk.vbs"
         if (Test-Path $vbs) { Remove-Item $vbs -Force -ErrorAction SilentlyContinue }
     }
 
@@ -600,7 +829,7 @@ function Do-FullUninstallWork {
     $state.Result = @{ Phase = "config_question" }
 }
 
-function Do-FullUninstallRcloneConfig($DeleteAll) {
+function Do-FullUninstallRcloneConfig([bool]$DeleteAll) {
 	
 	$state = Protect-State
 	
